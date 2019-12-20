@@ -21,6 +21,15 @@ VERSION = '0.1'
 queue = Queue()
 
 
+def check_folders(folders_list):
+    for folder in folders_list:
+        if not os.path.exists(folder):
+            try:
+                os.mkdir(folder)
+            except Exception as ex:
+                print('Could\'t create {} folder\n\nExiting..'.format(folder))
+
+
 def put_file_in_queue(ftp):
     global queue
     images_processed = []
