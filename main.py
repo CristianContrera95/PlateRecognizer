@@ -186,7 +186,7 @@ def main():
 
                         img_plate = cut_and_save(car_image_path, plate_box, plate, plates_folder)
                         print('Plate detected: {}'.format(plate))
-                        fp.write(str(dict(plate=plate, image_str=b64encode(img_plate.tobytes()))))
+                        fp.write(str(dict(plate=plate, image_path=car_image_path)))  # b64encode(img_plate.tobytes())
                         fp.flush()
                         break
         except KeyboardInterrupt:
