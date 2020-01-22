@@ -5,13 +5,14 @@ import ftplib
 from random import randint
 from io import BytesIO
 
+import numpy as np
 from skimage.metrics import structural_similarity
 from PIL import Image
-
+import dlib
 import cv2
 import requests
 import imagehash
-import warnings  
+import warnings
 with warnings.catch_warnings():  
     warnings.filterwarnings("ignore",category=FutureWarning)
     from imageai.Detection import ObjectDetection
@@ -88,11 +89,12 @@ class FTP:
 
     def get_file(self, filename):
         try:
-            #filename = os.path.join(self.folder, filename)
-            print('getting: {}'.format(filename))
+            # filename = os.path.join(self.folder, filename)
+            # print('getting: {}'.format(filename))
             result = self.ftp.retrbinary('RETR {}'.format(os.path.join(self.folder, filename)),
                                          self.handle_binary,
                                          blocksize=1024*1024*1024)
+
             self.img_buff.seek(0)
             if not result.startswith('226'):
                 return False
@@ -117,7 +119,7 @@ class FTP:
 def get_probably_char(candidates, index, func):
     for candidate in candidates:
         n_plate = candidate['plate']
-        if getattr(n_plate[index], func)(): 
+        if getattr(n_plate[index], func)():
             return n_plate[index]
 
 
@@ -143,10 +145,10 @@ class API:
         plate_box = list(result['box'].values())  # ymin, xmin, ymax, xmax
         plate_box = [plate_box[1]-10, plate_box[0]-10, plate_box[3]+10, plate_box[2]+10]
         plate = result['plate']
-        is_new_plate = 1 if len(plate) == 7 else 0
+        is_new_plate = True if len(plate) == 7 else False
 
         for i in range(len(plate)):
-            if (is_new_plate and (i in [0,1,5,6])) or ((not is_new_plate) and (i in [3,4,5])):
+            if (is_new_plate and (i in [2, 3, 4])) or ((not is_new_plate) and (i in [3, 4, 5])):
                 if not plate[i].isnumeric():
                     c = get_probably_char(result['candidates'], i, 'isnumeric')
                     l = list(plate)
@@ -168,7 +170,7 @@ def get_center_square(squares_list):
     for square in squares_list:
         height = square[5][0]
         width = square[5][0]
-        x1,y1,x2,y2 = square[3]
+        x1, y1, x2, y2 = square[3]
         percen_centered_width = abs((((x1+x2)/2) * 100 / width) - 50)
         percen_centered_height = abs((((y1+y2)/2) * 100 / height) - 50)
         results.append((percen_centered_width, percen_centered_height, square))
@@ -177,9 +179,65 @@ def get_center_square(squares_list):
     return list(map(lambda x: x[2], results))
 
 
+def box_size(box):
+    return (box[2]-box[0])*(box[3]-box[1])
+
+
+def nms(boxes, overlapThresh):
+    """
+    :param boxes: array of tuples like (x,y,w,h)
+    :param overlapThresh: float used to represent overlap percentage
+    """
+    if len(boxes) <= 0:
+        return []
+
+    # get the coordinates of the all bounding boxes
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+
+    # compute the area of the boxes and sort the boxes by the bottom-right y-coordinate
+    area = (x2 - x1 + 1) * (y2 - y1 + 1)
+    idxs = np.argsort(y2)
+
+    pick = []
+    while len(idxs) > 0:
+
+        last = len(idxs) - 1
+        i = idxs[last]
+        pick.append(i)
+        suppress = [last]
+
+        # loop over all indexes in the indexes list
+        for pos in range(last):
+            j = idxs[pos]
+
+            # find the largest (x, y) coordinates for the top-left of the boxes and
+            # the smallest (x, y) coordinates for the bottom-right of the boxes
+            xx1 = max(x1[i], x1[j])
+            yy1 = max(y1[i], y1[j])
+            xx2 = min(x2[i], x2[j])
+            yy2 = min(y2[i], y2[j])
+
+            # compute the width and height of the box
+            w = max(0, xx2 - xx1 + 1)
+            h = max(0, yy2 - yy1 + 1)
+
+            # compute the ratio of overlap between the computed box and the box in the area list
+            overlap = float(w * h) / area[j]
+
+            if overlap > overlapThresh:
+                suppress.append(pos)
+
+        idxs = np.delete(idxs, suppress)
+
+    return boxes[pick]
+
+
 class CarDetector:
 
-    def __init__(self, model, threshold):
+    def __init__(self, model, threshold, cascade_src='models/cars.xml'):
         super(CarDetector, self).__init__()
         self.model = model
         self.threshold = threshold
@@ -188,80 +246,200 @@ class CarDetector:
         self.detector.setModelPath(os.path.join(os.curdir, self.model))
         self.detector.loadModel(detection_speed='normal')  # "normal, "fast", "faster", "fastest","flash".
         self.custom = self.detector.CustomObjects(car=True, motorcycle=True, bus=True, truck=True, suitcase=True)
-
-    def remove_equalscars(self, images_list):
-
-        images_list = sorted(images_list, key=lambda x: len(x), reverse=True)
-        results = images_list.copy()
-
-        first_image = images_list.pop(0)
-        col_num = 0
-        row_num = 0
-        first_num = 0
-        for car1, img_size1, _ in first_image:
-            flag = True
-            gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
-            for image in images_list:
-                row_num += 1
-
-                scores = []
-                for car2, img_size2, _ in image:
-
-                    gray2 = cv2.cvtColor(car2, cv2.COLOR_BGR2GRAY)
-                    gray2 = cv2.resize(gray2, (gray1.shape[1], gray1.shape[0]), interpolation=cv2.INTER_AREA)
-
-                    scores.append((col_num, img_size2, structural_similarity(gray1, gray2)))
-                    col_num += 1
-
-                if scores:
-                    col, img_size2, max_score = max(scores, key=lambda x: x[2])
-
-                    if max_score > 0.20:
-                        if img_size1 >= img_size2:
-                            if results:
-                                if len(results[row_num]) > 0:
-                                    results[row_num].pop(col)
-                        else:
-                            if results:
-                                if len(results[first_num]) > 0:
-                                    results[first_num].pop(col)
-                                    first_num = row_num
-                                    car1 = results[row_num][col][0]
-                                    gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
-                                    img_size1 = img_size2
-                                    break
-        return results
+        self.trackers = []
+        self.count_cars = 0
+        self.cascade = cv2.CascadeClassifier(cascade_src)
 
     def detect(self, images):
-        results = []  # [(vehicle, confiablity, boxsize, coordinates, img_detected),] 
+        detected_cars = {}
         image_num = 0
-        images_list = []
-        for img in images:
-            #img = cv2.imread(image_file)  # Read images in ftp_images/ dir
+        count = -1
+        remove_images = []
+
+        for img in images:  # TODO: check rgb in imagescar
+            # iteration over images and detect vehicles in there
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
             _, detections = self.detector.detectCustomObjectsFromImage(custom_objects=self.custom,
                                                                        input_type="array",
                                                                        input_image=img,
                                                                        output_type='array',
                                                                        minimum_percentage_probability=self.threshold)
-            cars = []
-            count = 0
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            count += 1
+            if not detections:
+                remove_images.append(count)
+                continue
+
+            img_area = img.shape[0] * img.shape[1]
+            image_num += 1
+            detected_cars[f'image_{image_num}'] = []
+            for item in detections:
+                # Guardamos para cada vehiculo el box donde se encuenta en la imagen
+                print('Area: ', (box_size(item['box_points'])*100 / img_area))
+                if (box_size(item['box_points'])*100 / img_area) > 4.5:
+                    # Solo Guardamos si el box es hasta 5 veces mas chica que la imagen
+                    detected_cars[f'image_{image_num}'].append(tuple(item['box_points']))
+                    self.count_cars += 1
+
+            if len(detected_cars[f'image_{image_num}']) == 0:
+                del detected_cars[f'image_{image_num}']
+                image_num -= 1
+                remove_images.append(count)
+                continue
+            else:
+                # eliminamos los box sobrepuestos que puedan existir
+                detected_cars[f'image_{image_num}'] = nms(np.array(detected_cars[f'image_{image_num}']), 0.3).tolist()
+
+        # Remove without cars insisde
+        offset = 0
+        for index in remove_images:
+            images.pop(index-offset)
+            offset += 1
+
+        dict_unique_cars = {}
+        car_count = 0
+
+        image_num = 0
+        for img in images:  # iteramos sobre cada imagen para trackear cada auto en ella en las demas imagenes
+
+            image_num += 1
+            for box in detected_cars[f'image_{image_num}']:  # trackeamos cada auto en la imagen
+                detected_cars[f'image_{image_num}'].remove(box)
+                tracker = dlib.correlation_tracker()
+                x1, y1, x2, y2 = box
+                tracker.start_track(img, dlib.rectangle(x1, y1, x2, y2))
+
+                car_count += 1
+                dict_unique_cars[f'car_{car_count}'] = [img[y1:y2, x1:x2]]
+
+                image_num2 = 0
+                for img2 in images:  # iteramos sobre las demas imagenes buscando el auto
+                    image_num2 += 1
+                    if image_num != image_num2:
+                        tracker.update(img2)
+                        car = tracker.get_position()
+                        car = (int(car.left()), int(car.top()), int(car.right()), int(car.bottom()))
+
+                        # obtenemos los autos detectados en la imagen para comparar con el tracking del auto actual
+                        boxs_of_cars = detected_cars[f'image_{image_num2}']
+
+                        if len(boxs_of_cars) == len(nms(np.array(boxs_of_cars + [car]), 0.15)):
+                            # True se el auto esta en la segunda imagen tambien
+
+                            for box2 in boxs_of_cars:  # buscamos nuevamente el auto dentro de la segunda imagen
+                                if len(nms(np.array([box2, car]), 0.15)) != 2:  # True si box2 y car son el mismo auto
+                                    try:
+                                        x1, y1, x2, y2 = box2
+                                        detected_cars[f'image_{image_num2}'].remove(box2)
+
+                                        dict_unique_cars[f'car_{car_count}'].append(img2[y1:y2, x1:x2])
+                                    except Exception as ex:
+                                        print(ex)
+                                        pass
+
+                                    break
+
+        for key in dict_unique_cars.keys():
+            dict_unique_cars[key] = list(sorted(dict_unique_cars[key], key=lambda x: x.size, reverse=True))
+
+        return dict_unique_cars
+
+
+
+"""
+def remove_equalscars(self, images_list):
+
+    images_list = sorted(images_list, key=lambda x: len(x), reverse=True)
+    results = images_list.copy()
+
+    first_image = images_list.pop(0)
+    col_num = 0
+    row_num = 0
+    first_num = 0
+    for car1, img_size1, _ in first_image:
+        flag = True
+        gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
+        for image in images_list:
+            row_num += 1
+
+            scores = []
+            for car2, img_size2, _ in image:
+
+                gray2 = cv2.cvtColor(car2, cv2.COLOR_BGR2GRAY)
+                gray2 = cv2.resize(gray2, (gray1.shape[1], gray1.shape[0]), interpolation=cv2.INTER_AREA)
+
+                scores.append((col_num, img_size2, structural_similarity(gray1, gray2)))
+                col_num += 1
+
+            if scores:
+                col, img_size2, max_score = max(scores, key=lambda x: x[2])
+
+                if max_score > 0.20:
+                    if img_size1 >= img_size2:
+                        if results:
+                            if len(results[row_num]) > 0:
+                                results[row_num].pop(col)
+                    else:
+                        if results:
+                            if len(results[first_num]) > 0:
+                                results[first_num].pop(col)
+                                first_num = row_num
+                                car1 = results[row_num][col][0]
+                                gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
+                                img_size1 = img_size2
+                                break
+    return results
+    
+        def detect(self, images):
+        results = []  # [(vehicle, confiablity, boxsize, coordinates, img_detected),] 
+        image_num = 0
+        images_list = []
+        amount_cars = []
+        cars = []
+        l = []
+        li = []
+        for img in images:
+            
+            _, detections = self.detector.detectCustomObjectsFromImage(custom_objects=self.custom,
+                                                                       input_type="array",
+                                                                       input_image=img,
+                                                                       output_type='array',
+                                                                       minimum_percentage_probability=self.threshold)
+            if len(detections) == 0:
+                images.remove(img)
             for item in detections:
                 if item["name"] in ('car', 'truck', 'suitcase', 'motorcycle', 'bus'):
-                    x1,y1,x2,y2 = item["box_points"]
+                    x1, y1, x2, y2 = item["box_points"]
                     box_size = (x2-x1)*(y2-y1)
-
                     cars.append((img[y1:y2, x1:x2],
-                                 box_size, 
+                                 box_size,
                                  (item["name"], item["percentage_probability"], box_size, item["box_points"],
-                                  img[y1:y2, x1:x2], img.shape, image_num)
-                                ))
-            if cars:        
+                                  img[y1:y2, x1:x2], img.shape, image_num),
+                                 img))
+            if cars:
                 images_list.append(cars)
+                cars = []
 
-        #results = self.remove_equalscars(images_list)  # get index of uniques cars with max sizes
-        results = images_list
-        results = list(filter(lambda x: len(x) > 0, results))
-        results = list(map(lambda x: x[0][2], results))
-        #results = get_center_square(results)
-        #results = list(sorted(results, key=lambda x: (x[2], x[1]), reverse=True))
+        index = images_list.index(max(images_list))
+        for car in images_list.pop(index):
+            self.trackers.append((car[-1], dlib.correlation_tracker().start_track(car[-1], dlib.rectangle(car[1]))))
+
+        for cur_car, tracker in self.trackers:
+            cur_car = cv2.cvtColor(cur_car, cv2.COLOR_BGR2GRAY)
+            for img in images:
+                if np.isnan(tracker.update(img)):
+                    continue
+                box = tracker.get_position()
+                x1, y1, x2, y2 = box.left(), box.top(), box.right(), box.bottom()
+                img = img[y1:y2, x1:x2]
+                img = cv2.resize(img, (cur_car.shape[1], cur_car.shape[0]), interpolation=cv2.INTER_AREA)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                if structural_similarity(cur_car, img) > 0.4:
+                    cur_car = img if img.size > cur_car.size else cur_car
+
+            results.append(cur_car)
+
         return results
+
+"""
