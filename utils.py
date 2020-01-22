@@ -33,7 +33,7 @@ class FTP:
 
     def __check_addr(self):
         if self.url[len(self.url)-1] == '.':
-                self.url = self.url[:-1]
+            self.url = self.url[:-1]
 
         if re.fullmatch('((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(\.|$)){4}', self.url) is None:
             print('Error in server address')
@@ -41,10 +41,10 @@ class FTP:
         if not isinstance(self.port, int):
             try:
                 self.port = int(self.port)
-            except:
-                print('Error in server address')
+            except Exception as ex:
+                print('Error in server address\n', ex)
                 return 1
-        return 0            
+        return 0
 
     def connect(self, login=False):
         if self.__check_addr():
@@ -55,10 +55,10 @@ class FTP:
             try:
                 count += 1
                 self.ftp.connect(self.url, self.port)
-                print(self.ftp.welcome, '\nConnected to ftp server in {}:{}'.format(self.url, self.port))
+                print(self.ftp.welcome, f'\nConnected to ftp server in {self.url}:{self.port}')
             except Exception as ex:
                 if count == self.connect_tries:
-                    print('Couldn\'t connect to {}:{} ftp-server.\nPlease check address'.format(self.url, self.port))
+                    print(f'Couldn\'t connect to {self.url}:{self.port} ftp-server.\nPlease check address')
                     return 1
             else:
                 break
@@ -69,15 +69,15 @@ class FTP:
     def login(self):
         try:
             self.ftp.login(self.user, self.password)
-            print('Logged in server with {} user'.format(self.user))
+            print(f'Logged in server with {self.user} user')
         except Exception as ex:
-            print('Couldn\'t login with {} user.\nPlease check user and password'.format(self.user))
+            print(f'Couldn\'t login with {self.user} user.\nPlease check user and password')
 
     def change_folder(self):
         try:
             self.ftp.cwd(self.folder)
         except Exception as ex:
-            print('Couldn\'t find {} dir.\nYou do not have permissions or the directory does not exist'.format(self.folder))
+            print(f'Couldn\'t find {self.folder} dir.\nYou do not have permissions or the directory does not exist')
             return 1
         return 0
 
@@ -89,9 +89,7 @@ class FTP:
 
     def get_file(self, filename):
         try:
-            # filename = os.path.join(self.folder, filename)
-            # print('getting: {}'.format(filename))
-            result = self.ftp.retrbinary('RETR {}'.format(os.path.join(self.folder, filename)),
+            result = self.ftp.retrbinary(f'RETR {os.path.join(self.folder, filename)}',
                                          self.handle_binary,
                                          blocksize=1024*1024*1024)
 
@@ -135,7 +133,7 @@ class API:
             response = requests.post(
                     self.API_URL,
                     files=dict(upload=fp),
-                    headers={'Authorization': 'Token {}'.format(self.API_TOKEN)}
+                    headers={'Authorization': f'Token {self.API_TOKEN}'}
                     )
         return response.json()
 
@@ -237,10 +235,11 @@ def nms(boxes, overlapThresh):
 
 class CarDetector:
 
-    def __init__(self, model, threshold, cascade_src='models/cars.xml'):
+    def __init__(self, model, threshold, car_percent):
         super(CarDetector, self).__init__()
         self.model = model
         self.threshold = threshold
+        self.car_percent = car_percent
         self.detector = ObjectDetection()
         self.detector.setModelTypeAsTinyYOLOv3()
         self.detector.setModelPath(os.path.join(os.curdir, self.model))
@@ -248,7 +247,6 @@ class CarDetector:
         self.custom = self.detector.CustomObjects(car=True, motorcycle=True, bus=True, truck=True, suitcase=True)
         self.trackers = []
         self.count_cars = 0
-        self.cascade = cv2.CascadeClassifier(cascade_src)
 
     def detect(self, images):
         detected_cars = {}
@@ -277,7 +275,7 @@ class CarDetector:
             for item in detections:
                 # Guardamos para cada vehiculo el box donde se encuenta en la imagen
                 print('Area: ', (box_size(item['box_points'])*100 / img_area))
-                if (box_size(item['box_points'])*100 / img_area) > 4.5:
+                if (box_size(item['box_points'])*100 / img_area) > self.car_percent:
                     # Solo Guardamos si el box es hasta 5 veces mas chica que la imagen
                     detected_cars[f'image_{image_num}'].append(tuple(item['box_points']))
                     self.count_cars += 1

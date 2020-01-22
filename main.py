@@ -1,13 +1,9 @@
 import os
-import sys
-import re
 import time
-import pickle
 import configparser
-import json
 from multiprocessing import Process, Queue
 from datetime import datetime as dt
-
+from base64 import b64encode
 import numpy as np
 import cv2
 from PIL import Image
@@ -86,6 +82,7 @@ def cut_and_save(car_image_path, plate_box, plate, plates_folder):
     img_plate = Image.open(car_image_path)
     img_plate = img_plate.crop(tuple(plate_box))
     img_plate.save(os.path.join(plates_folder, plate+'.jpg'))
+    return img_plate
 
 
 def main():
@@ -119,6 +116,7 @@ def main():
 
     car_detector = CarDetector(model=config['car_detect'].get('model'),
                                threshold=int(config['car_detect'].get('threshold', '50')),
+                               car_percent=int(config['car_detect'].get('car_percent', '4.5'))
                                )
 
     proc_put_file = Process(target=put_file_in_queue, 
@@ -147,39 +145,25 @@ def main():
 
             dict_unique_cars = car_detector.detect(images_list)
             for key in dict_unique_cars.keys():
-                folder = os.path.join(car_images_folder, key + str(dt.now()))
+                folder = os.path.join(car_images_folder, key + dt.now().strftime('%Y-%m-%d_%H:%M:%S'))
                 os.mkdir(folder)
                 for car in dict_unique_cars[key]:
-                    cv2.imwrite(os.path.join(folder,
-                                             'car_'+str(len(os.listdir(folder))) + '.jpg'),
-                                car)
-            continue
+                    car_image_path = os.path.join(folder, 'car_'+str(len(os.listdir(folder))) + '.jpg')
+                    if not cv2.imwrite(car_image_path, car):
+                        print('No se pudo guardar la imagen en {}'.format(car_image_path))
+                        continue
 
-        car_count = 1
-        for car_image in car_images:
+                    response = api.request(car_image_path)
+                    result = response['results'] if 'results' in response else []
+                    if len(result) == 0:
+                        print('No results for plate')
+                        continue
+                    plate, plate_box = api.improve_plate(result)
 
-            car_count += 1
-            car_image_path = os.path.join(car_images_folder, 'car_'+str(len(os.listdir(car_images_folder)))+'.jpg')
-            if not cv2.imwrite(car_image_path, car_image):
-                print('No se pudo guardar la imagen en {}'.format(car_image_path))
-                continue
-            # print(f'Saved car in {car_image_path}')
-
-            c = cv2.imread(car_image_path)
-            cv2.imshow('car', c)
-            cv2.waitKey(1000)
-            cv2.destroyAllWindows()
-
-                # response = api.request(car_image_path)
-                # result = response['results'] if 'results' in response else []
-                # if len(result) == 0:
-                #     print('No results for plate')
-                #     continue
-                # plate, plate_box = api.improve_plate(result)
-                #
-                # cut_and_save(car_image_path, plate_box, plate, plates_folder)
-                # print('Plate detected: {}'.format(plate))
-                # fp.write(str(dict(plate=plate, image_str=img_plate.tostring())))
+                    img_plate = cut_and_save(car_image_path, plate_box, plate, plates_folder)
+                    print('Plate detected: {}'.format(plate))
+                    fp.write(str(dict(plate=plate, image_str=b64encode(img_plate.tobytes()))))
+                    break
         fp.write(']')
 
 
