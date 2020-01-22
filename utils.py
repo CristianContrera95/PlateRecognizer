@@ -2,16 +2,12 @@ import re
 import os
 import ftplib
 
-from random import randint
 from io import BytesIO
 
 import numpy as np
-from skimage.metrics import structural_similarity
-from PIL import Image
 import dlib
 import cv2
 import requests
-import imagehash
 import warnings
 with warnings.catch_warnings():  
     warnings.filterwarnings("ignore",category=FutureWarning)
@@ -274,7 +270,6 @@ class CarDetector:
             detected_cars[f'image_{image_num}'] = []
             for item in detections:
                 # Guardamos para cada vehiculo el box donde se encuenta en la imagen
-                print('Area: ', (box_size(item['box_points'])*100 / img_area))
                 if (box_size(item['box_points'])*100 / img_area) > self.car_percent:
                     # Solo Guardamos si el box es hasta 5 veces mas chica que la imagen
                     detected_cars[f'image_{image_num}'].append(tuple(item['box_points']))

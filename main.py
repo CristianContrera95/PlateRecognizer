@@ -32,39 +32,42 @@ def check_folders(folders_list):
 def put_file_in_queue(ftp):
     global queue
     images_processed = []
-    while True:
-        if ftp.connect():
-            exit(0)
-        if ftp.login():
-            exit(0)
+    try:
+        while True:
+            if ftp.connect():
+                exit(0)
+            if ftp.login():
+                exit(0)
 
-        ftp_files = ftp.get_files_from_folder(ftp.folder)
-        ftp_files = list(filter(lambda x: (x.startswith(PRE_DATE_FILENAME)) and (x not in images_processed), ftp_files))
-        ftp_files = list(sorted(map(lambda x: dt.strptime(x, f'{PRE_DATE_FILENAME}%Y%m%d%H%M%S%f{POST_DATE_FILENAME}'),
-                                    ftp_files), reverse=True))
+            ftp_files = ftp.get_files_from_folder(ftp.folder)
+            ftp_files = list(filter(lambda x: (x.startswith(PRE_DATE_FILENAME)) and (x not in images_processed), ftp_files))
+            ftp_files = list(sorted(map(lambda x: dt.strptime(x, f'{PRE_DATE_FILENAME}%Y%m%d%H%M%S%f{POST_DATE_FILENAME}'),
+                                        ftp_files), reverse=True))
 
-        if not ftp_files:
-            continue
-        files = [ftp_files[0]]
-        for file in ftp_files[1:]:
-            if (files[-1] - file).seconds < 2:
-                files.append(file)
-        print(f'Getting {len(files)} files')
-        files = list(map(lambda x: f'{PRE_DATE_FILENAME}{x.strftime("%Y%m%d%H%M%S%f")[:-3]}{POST_DATE_FILENAME}', files))
-        images = []
-        for file in files:
-            if file in images_processed:
+            if not ftp_files:
                 continue
-            if not ftp.get_file(file):
-                print(f'Could get {file}')
-                continue
-            imagen = ftp.img_buff.getvalue()
-            # ftp.ftp.delete(ftp.folder+'/'+ftp_file)
-            images_processed.append(file)
-            images.append((imagen, file))
-        if images:
-            queue.put(images)
-        time.sleep(5)
+            files = [ftp_files[0]]
+            for file in ftp_files[1:]:
+                if (files[-1] - file).seconds < 2:
+                    files.append(file)
+            print(f'Getting {len(files)} files')
+            files = list(map(lambda x: f'{PRE_DATE_FILENAME}{x.strftime("%Y%m%d%H%M%S%f")[:-3]}{POST_DATE_FILENAME}', files))
+            images = []
+            for file in files:
+                if file in images_processed:
+                    continue
+                if not ftp.get_file(file):
+                    print(f'Could get {file}')
+                    continue
+                imagen = ftp.img_buff.getvalue()
+                # ftp.ftp.delete(ftp.folder+'/'+ftp_file)
+                images_processed.append(file)
+                images.append((imagen, file))
+            if images:
+                queue.put(images)
+            time.sleep(5)
+    except KeyboardInterrupt:
+        pass
 
 
 def get_file_in_queue():
@@ -85,6 +88,13 @@ def cut_and_save(car_image_path, plate_box, plate, plates_folder):
     return img_plate
 
 
+def check_folder_day(folder_path, prefix=''):
+    folder = folder_path.split(os.path.sep)[-1]
+    if folder != prefix+dt.now().strftime('%Y-%m-%d'):
+        return os.path.join(f'{os.path.sep}'.join(folder_path.split(os.path.sep)[:-1]), prefix+dt.now().strftime('%Y-%m-%d'))
+    return folder_path
+
+
 def main():
     global queue
 
@@ -97,6 +107,14 @@ def main():
     ftp_images_folder = config['folders'].get('ftp_images', '')
     car_images_folder = config['folders'].get('car_images', '.')
     plates_folder = config['folders'].get('plates', '.')
+
+    car_images_folder = os.path.join(car_images_folder, 'cars_'+dt.now().strftime('%Y-%m-%d'))
+    if not os.path.exists(car_images_folder):
+        os.mkdir(car_images_folder)
+
+    plates_folder = os.path.join(plates_folder, 'plates_' + dt.now().strftime('%Y-%m-%d'))
+    if not os.path.exists(plates_folder):
+        os.mkdir(plates_folder)
 
     ftp = FTP(url=config['ftp'].get('server_url'),
               port=int(config['ftp'].get('server_port', '9999')),
@@ -116,56 +134,68 @@ def main():
 
     car_detector = CarDetector(model=config['car_detect'].get('model'),
                                threshold=int(config['car_detect'].get('threshold', '50')),
-                               car_percent=int(config['car_detect'].get('car_percent', '4.5'))
+                               car_percent=float(config['car_detect'].get('car_percent', '4.5'))
                                )
 
-    proc_put_file = Process(target=put_file_in_queue, 
+    proc_put_file = Process(target=put_file_in_queue,
                             args=(ftp,)
                             )
 
     proc_put_file.start()
+
     print('Ready and working..\n')
-    with open('plates_result_{}.json'.format(dt.now().strftime('%Y-%m-%d')), 'a') as fp:
-        fp.write('[\n')
 
-        while True:
-            images = get_file_in_queue()
-            if not images:
-                time.sleep(1)
-                continue
-            images_list = []
+    with open(os.path.join(config['folders'].get('results', '.'),
+                           f'plates_result_{dt.now().strftime("%Y-%m-%d")}.json'), 'a') as fp:
+        try:
+            fp.write('[\n')
 
-            for image, image_name in images:
-                img = np.frombuffer(image, dtype=np.uint8)
-                img = cv2.imdecode(img, 1)
-                if ftp_images_folder:
-                    cv2.imwrite(os.path.join(ftp_images_folder, image_name), img)
-                images_list.append(img)
-            # car_images, dict_unique_cars = car_detector.detect(images_list)
+            while True:
+                check_folder_day(car_images_folder, 'cars_')
+                check_folder_day(plates_folder, 'plates_')
+                images = get_file_in_queue()
+                if not images:
+                    time.sleep(1)
+                    continue
+                images_list = []
 
-            dict_unique_cars = car_detector.detect(images_list)
-            for key in dict_unique_cars.keys():
-                folder = os.path.join(car_images_folder, key + dt.now().strftime('%Y-%m-%d_%H:%M:%S'))
-                os.mkdir(folder)
-                for car in dict_unique_cars[key]:
-                    car_image_path = os.path.join(folder, 'car_'+str(len(os.listdir(folder))) + '.jpg')
-                    if not cv2.imwrite(car_image_path, car):
-                        print('No se pudo guardar la imagen en {}'.format(car_image_path))
-                        continue
+                for image, image_name in images:
+                    img = np.frombuffer(image, dtype=np.uint8)
+                    img = cv2.imdecode(img, 1)
+                    if ftp_images_folder:
+                        cv2.imwrite(os.path.join(ftp_images_folder, image_name), img)
+                    images_list.append(img)
+                # car_images, dict_unique_cars = car_detector.detect(images_list)
 
-                    response = api.request(car_image_path)
-                    result = response['results'] if 'results' in response else []
-                    if len(result) == 0:
-                        print('No results for plate')
-                        continue
-                    plate, plate_box = api.improve_plate(result)
+                dict_unique_cars = car_detector.detect(images_list)
+                for key in dict_unique_cars.keys():
+                    folder = os.path.join(car_images_folder, key + dt.now().strftime('%Y-%m-%d_%H:%M:%S'))
+                    os.mkdir(folder)
+                    for car in dict_unique_cars[key]:
+                        car_image_path = os.path.join(folder, 'car_'+str(len(os.listdir(folder))) + '.jpg')
+                        if not cv2.imwrite(car_image_path, car):
+                            print('No se pudo guardar la imagen en {}'.format(car_image_path))
+                            continue
 
-                    img_plate = cut_and_save(car_image_path, plate_box, plate, plates_folder)
-                    print('Plate detected: {}'.format(plate))
-                    fp.write(str(dict(plate=plate, image_str=b64encode(img_plate.tobytes()))))
-                    break
-        fp.write(']')
+                        response = api.request(car_image_path)
+                        result = response['results'] if 'results' in response else []
+                        if len(result) == 0:
+                            print('No results for plate')
+                            continue
+                        plate, plate_box = api.improve_plate(result)
+
+                        img_plate = cut_and_save(car_image_path, plate_box, plate, plates_folder)
+                        print('Plate detected: {}'.format(plate))
+                        fp.write(str(dict(plate=plate, image_str=b64encode(img_plate.tobytes()))))
+                        fp.flush()
+                        break
+        except KeyboardInterrupt:
+            fp.write(']\n')
+            print('Shut down system...')
 
 
 if __name__ == '__main__':
-    main()
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=FutureWarning)
+        main()
