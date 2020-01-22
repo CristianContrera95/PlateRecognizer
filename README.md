@@ -11,7 +11,7 @@ Sistema para renconcer autos en images y detectar las patentes de estos.
 | **output** | carpeta donde se guardaran por dia un json con la patente como texto y el path a la imagen de la patente |
 | **config.ini** | Archivo de configuracion con los parametros para el sistema |
 | **utils.py** | Funciones de utilidad del sistema (server ftp, API, vehicles detection) |
-| **main.py* *| modulo pricipal del sistema |
+| **main.py** | modulo pricipal del sistema |
 | **Dokcerfile** | Archivo Docker para crear el entorno de ejecucion |
 | **requirements.txt** | archivo con las librerias a utilizar por el sistema |
 
