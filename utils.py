@@ -1,5 +1,6 @@
 import re
 import os
+import io
 import ftplib
 
 from io import BytesIO
@@ -22,6 +23,7 @@ class FTP:
         self.url = url
         self.port = port
         self.folder = folder
+        self.trash_folder = folder + '_trash'
         self.user = user
         self.password = password
         self.connect_tries = connect_tries
@@ -42,7 +44,7 @@ class FTP:
                 return 1
         return 0
 
-    def connect(self, login=False):
+    def connect(self, vervose=False, login=False):
         if self.__check_addr():
             return 1
         count = 0
@@ -51,7 +53,8 @@ class FTP:
             try:
                 count += 1
                 self.ftp.connect(self.url, self.port)
-                print(self.ftp.welcome, f'\nConnected to ftp server in {self.url}:{self.port}')
+                if vervose:
+                    print(self.ftp.welcome, f'\nConnected to ftp server in {self.url}:{self.port}')
             except Exception as ex:
                 if count == self.connect_tries:
                     print(f'Couldn\'t connect to {self.url}:{self.port} ftp-server.\nPlease check address')
@@ -62,10 +65,11 @@ class FTP:
             self.login()
         return 0
 
-    def login(self):
+    def login(self, vervose=False):
         try:
             self.ftp.login(self.user, self.password)
-            print(f'Logged in server with {self.user} user')
+            if vervose:
+                print(f'Logged in server with {self.user} user')
         except Exception as ex:
             print(f'Couldn\'t login with {self.user} user.\nPlease check user and password')
 
@@ -85,7 +89,7 @@ class FTP:
 
     def get_file(self, filename):
         try:
-            result = self.ftp.retrbinary(f'RETR {os.path.join(self.folder, filename)}',
+            result = self.ftp.retrbinary(f'RETR {filename}',
                                          self.handle_binary,
                                          blocksize=1024*1024*1024)
 
@@ -103,11 +107,21 @@ class FTP:
         except Exception as ex:
             return []
 
-    def remove_file(self, filename, folder=False):
-        pass
+    def move_file(self, src_file, des_file):
+        try:
+            self.ftp.rename(src_file, des_file)
+        except Exception:
+            pass
 
     def create_file(self, filename, folder=False):
-        pass
+        try:
+            if folder:
+                self.ftp.mkd(filename)
+            else:
+                nothing = io.BytesIO(b'')
+                self.ftp.storbinary(f'STOR {filename}', nothing)
+        except Exception:
+            pass
 
 
 def get_probably_char(candidates, index, func):
@@ -133,14 +147,17 @@ class API:
                     )
         return response.json()
 
-    def improve_plate(self, result):
+    def improve_plate(self, result):  #TODO: plate = ''.join(l) fail
         result = result[0] if isinstance(result, list) and (len(result) > 0) else result
 
         plate_box = list(result['box'].values())  # ymin, xmin, ymax, xmax
         plate_box = [plate_box[1]-10, plate_box[0]-10, plate_box[3]+10, plate_box[2]+10]
         plate = result['plate']
         is_new_plate = True if len(plate) == 7 else False
-
+        if not is_new_plate:
+            plate = plate[:6]
+        else:
+            plate = plate[:7]
         for i in range(len(plate)):
             if (is_new_plate and (i in [2, 3, 4])) or ((not is_new_plate) and (i in [3, 4, 5])):
                 if not plate[i].isnumeric():
@@ -154,8 +171,11 @@ class API:
                     l = list(plate)
                     l[i] = c
                     plate = ''.join(l)
-
-        return plate.upper(), plate_box
+        if not is_new_plate:
+            right_format = re.fullmatch('[A-Z]{3}[0-9]{3}', plate.upper())
+        else:
+            right_format = re.fullmatch('[A-Z]{2}[0-9]{3}[A-Z]{2}', plate.upper())
+        return plate.upper(), plate_box, right_format is not None
 
 
 def get_center_square(squares_list):
@@ -238,7 +258,7 @@ class CarDetector:
         self.car_percent = car_percent
         self.detector = ObjectDetection()
         self.detector.setModelTypeAsTinyYOLOv3()
-        self.detector.setModelPath(os.path.join(os.curdir, self.model))
+        self.detector.setModelPath(self.model)
         self.detector.loadModel(detection_speed='normal')  # "normal, "fast", "faster", "fastest","flash".
         self.custom = self.detector.CustomObjects(car=True, motorcycle=True, bus=True, truck=True, suitcase=True)
         self.trackers = []
@@ -337,102 +357,3 @@ class CarDetector:
             dict_unique_cars[key] = list(sorted(dict_unique_cars[key], key=lambda x: x.size, reverse=True))
 
         return dict_unique_cars
-
-
-
-"""
-def remove_equalscars(self, images_list):
-
-    images_list = sorted(images_list, key=lambda x: len(x), reverse=True)
-    results = images_list.copy()
-
-    first_image = images_list.pop(0)
-    col_num = 0
-    row_num = 0
-    first_num = 0
-    for car1, img_size1, _ in first_image:
-        flag = True
-        gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
-        for image in images_list:
-            row_num += 1
-
-            scores = []
-            for car2, img_size2, _ in image:
-
-                gray2 = cv2.cvtColor(car2, cv2.COLOR_BGR2GRAY)
-                gray2 = cv2.resize(gray2, (gray1.shape[1], gray1.shape[0]), interpolation=cv2.INTER_AREA)
-
-                scores.append((col_num, img_size2, structural_similarity(gray1, gray2)))
-                col_num += 1
-
-            if scores:
-                col, img_size2, max_score = max(scores, key=lambda x: x[2])
-
-                if max_score > 0.20:
-                    if img_size1 >= img_size2:
-                        if results:
-                            if len(results[row_num]) > 0:
-                                results[row_num].pop(col)
-                    else:
-                        if results:
-                            if len(results[first_num]) > 0:
-                                results[first_num].pop(col)
-                                first_num = row_num
-                                car1 = results[row_num][col][0]
-                                gray1 = cv2.cvtColor(car1, cv2.COLOR_BGR2GRAY)
-                                img_size1 = img_size2
-                                break
-    return results
-    
-        def detect(self, images):
-        results = []  # [(vehicle, confiablity, boxsize, coordinates, img_detected),] 
-        image_num = 0
-        images_list = []
-        amount_cars = []
-        cars = []
-        l = []
-        li = []
-        for img in images:
-            
-            _, detections = self.detector.detectCustomObjectsFromImage(custom_objects=self.custom,
-                                                                       input_type="array",
-                                                                       input_image=img,
-                                                                       output_type='array',
-                                                                       minimum_percentage_probability=self.threshold)
-            if len(detections) == 0:
-                images.remove(img)
-            for item in detections:
-                if item["name"] in ('car', 'truck', 'suitcase', 'motorcycle', 'bus'):
-                    x1, y1, x2, y2 = item["box_points"]
-                    box_size = (x2-x1)*(y2-y1)
-                    cars.append((img[y1:y2, x1:x2],
-                                 box_size,
-                                 (item["name"], item["percentage_probability"], box_size, item["box_points"],
-                                  img[y1:y2, x1:x2], img.shape, image_num),
-                                 img))
-            if cars:
-                images_list.append(cars)
-                cars = []
-
-        index = images_list.index(max(images_list))
-        for car in images_list.pop(index):
-            self.trackers.append((car[-1], dlib.correlation_tracker().start_track(car[-1], dlib.rectangle(car[1]))))
-
-        for cur_car, tracker in self.trackers:
-            cur_car = cv2.cvtColor(cur_car, cv2.COLOR_BGR2GRAY)
-            for img in images:
-                if np.isnan(tracker.update(img)):
-                    continue
-                box = tracker.get_position()
-                x1, y1, x2, y2 = box.left(), box.top(), box.right(), box.bottom()
-                img = img[y1:y2, x1:x2]
-                img = cv2.resize(img, (cur_car.shape[1], cur_car.shape[0]), interpolation=cv2.INTER_AREA)
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                if structural_similarity(cur_car, img) > 0.4:
-                    cur_car = img if img.size > cur_car.size else cur_car
-
-            results.append(cur_car)
-
-        return results
-
-"""

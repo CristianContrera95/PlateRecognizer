@@ -11,7 +11,7 @@ RUN apt-get update && ACCEPT_EULA=Y apt-get install -y msodbcsql17 mssql-tools u
 ENV PATH="${PATH}:/opt/mssql-tools/bin:/opt/mssql-tools/bin"
 
 # Debug
-#RUN mkdir app
+RUN mkdir app
 COPY requirements.txt /app/requirements.txt
 WORKDIR /app
 

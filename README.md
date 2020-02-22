@@ -35,10 +35,18 @@ Sistema para renconcer autos en images y detectar las patentes de estos.
 | **threshold** | humbral para la deteccion de vehiculos (recomendamos entre 0.3 y 0.6) |
 | **car_percent** | minimo porcetage del tamaño del auto en la imagen |
 
+### Build Docker 
+
+para correr el proyecto se posiciona en la carpeta donde se escuentre el proyecto y se ejecuta:
+```
+docker build -t plates_detect .
+```
+
+
 ### RUN
 
 para correr el proyecto se posiciona en la carpeta donde se escuentre el proyecto y se ejecuta:
 ```
- docker run --rm -v $PWD:/app -p 5000:5000 -it plates_detect
+docker run --rm -v $PWD:/app -p 5000:5000 -it plates_detect
 ```
 
